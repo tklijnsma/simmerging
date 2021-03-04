@@ -38,7 +38,6 @@ using std::pair;
 #define EDM_ML_DEBUG
 
 struct Hit {
-    Hit(){}
     Hit(float x, float y, float z, float t, float energy, int trackid) :
         x_(x), y_(y), z_(z), t_(t), energy_(energy), trackid_(trackid) {}
     ~Hit() {}
@@ -68,11 +67,14 @@ GlobalPoint hitcentroid(vector<Hit*> hits){
 
 class Node {
     public:
-        Node(){}
+        Node() : 
+            trackid_(0), energy_(0.), pdgid_(0), parent_(nullptr),
+            hitcentroidCalculated_(false), hitcentroid_(GlobalPoint(0.f,0.f,0.f))
+            {}
         Node(int trackid, float energy, int pdgid) :
             trackid_(trackid), energy_(energy), pdgid_(pdgid), parent_(nullptr),
             hitcentroidCalculated_(false), hitcentroid_(GlobalPoint(0.f,0.f,0.f))
-            {}
+            { mergedTrackIds_.push_back(trackid_); }
         ~Node() {}
 
         /* Standard depth-first-search tree traversal as an iterator */
@@ -161,34 +163,9 @@ class Node {
         IteratorUp begin_up() { return IteratorUp(this); }
         IteratorUp end_up() { return IteratorUp(nullptr); }
 
-        void setParent(Node* parent) {
-            // edm::LogVerbatim("SimMerging")
-            //     << "Track " << trackid_
-            //     << ": setting parent " << parent->trackid_
-            //     ;
-            parent_ = parent;
-            }
-
-        void addChild(Node* child) {
-            // edm::LogVerbatim("SimMerging")
-            //     << "Track " << trackid_
-            //     << ": adding child " << child->trackid_
-            //     << " (children_.size()=" << children_.size()
-            //     << ")"
-            //     ;
-            children_.push_back(child);
-            }
-
-        void addHit(Hit* hit) {
-            // edm::LogVerbatim("SimMerging")
-            //     << "Track " << trackid_
-            //     << ": adding child " << child->trackid_
-            //     << " (children_.size()=" << children_.size()
-            //     << ")"
-            //     ;
-            hits_.push_back(hit);
-            }
-
+        void setParent(Node* parent) {parent_ = parent;}
+        void addChild(Node* child) {children_.push_back(child);}
+        void addHit(Hit* hit) {hits_.push_back(hit);}
         int nhits(){ return hits_.size(); }
         bool hasHits(){ return nhits() > 0; }
         bool isLeaf(){ return children_.empty(); }
@@ -274,6 +251,7 @@ class Node {
         int pdgid_;
         Node * parent_;
         vector<Node*> children_;
+        vector<int> mergedTrackIds_;
         vector<Hit*> hits_;
         bool hitcentroidCalculated_;
         GlobalPoint hitcentroid_;
@@ -361,7 +339,7 @@ void trim_tree(Node* root){
     // Now remove all nodes not in the set
     // We'll be modifying parent-child relationships mid-loop, so we have to be a little
     // careful
-    auto it=root->begin(true);
+    auto it=root->begin();
     while(it!=root->end()){
         Node& node = (*it);
         if (!(trackids_with_hits_or_parents_thereof.count(node.trackid_))){
@@ -435,6 +413,8 @@ bool merge_leafparent_Mar03(Node* leafparent, float maxr=10.){
             << "    Merging " << pairToMerge.second->trackid_
             << " into " << pairToMerge.first->trackid_
             ;
+        // Bookkeep that the track is merged in
+        pairToMerge.first->mergedTrackIds_.push_back(pairToMerge.second->trackid_);
         // Move children
         for(auto child : pairToMerge.second->children_){
             pairToMerge.first->addChild(child);
@@ -554,7 +534,7 @@ simmerger::simmerger(const edm::ParameterSet& iConfig) :
     tokenSimTracks(consumes<edm::SimTrackContainer>(edm::InputTag("g4SimHits"))),
     tokenSimVertices(consumes<edm::SimVertexContainer>(edm::InputTag("g4SimHits")))
     {
-    produces<vector<int>>();
+    produces<vector<vector<int>>>();
     }
 
 
@@ -563,7 +543,7 @@ void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     iSetup.get<CaloGeometryRecord>().get(geom);
     hgcalRecHitToolInstance_.setGeometry(*geom);
 
-    std::unique_ptr<vector<int>> output(new vector<int>);
+    std::unique_ptr<vector<vector<int>>> output(new vector<vector<int>>);
 
     // Create Hit instances
     vector<Hit> hits;
@@ -597,10 +577,6 @@ void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     map<int, Node> trackid_to_node;
     for(const auto& track : *(handleSimTracks.product())){
         trackid_to_node.emplace(track.trackId(), Node(track.trackId(), track.momentum().E(), track.type()));
-        edm::LogVerbatim("SimMerging")
-            << "track.trackId()=" << track.trackId()
-            << ", node->trackid_=" << trackid_to_node[track.trackId()].trackid_
-            ;
         }
 
     edm::LogVerbatim("SimMerging") << "Adding hits to nodes";
@@ -609,29 +585,22 @@ void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
         }
 
     edm::LogVerbatim("SimMerging") << "Building tree";
-    vector<Node*> roots;
+    Node* root(new Node());
     for(const auto& track : *(handleSimTracks.product())){
         int trackid = track.trackId();
         Node* node = &(trackid_to_node[trackid]);
-
-        edm::LogVerbatim("SimMerging")
-            << "track.trackId()=" << trackid
-            << ", node->trackid_=" << node->trackid_;
-
         // Have to get parent info via the SimVertex
         SimVertex vertex = handleSimVertices.product()->at(track.vertIndex());
         bool hasParent = !(vertex.noParent());
-        int parentid = vertex.parentIndex();
         // Build the tree
-        edm::LogVerbatim("SimMerging") << "hasParent=" << hasParent;
         if (hasParent){
+            int parentid = vertex.parentIndex();
             edm::LogVerbatim("SimMerging")
                 << "Setting parent->child relationship: "
                 << parentid << " -> " << trackid
                 ;
             auto it = trackid_to_node.find(parentid);
             if (it != trackid_to_node.end()){
-                // edm::LogVerbatim("SimMerging") << "Found it!";
                 Node* parent = &(it->second);
                 node->setParent(parent);
                 parent->addChild(node);
@@ -644,29 +613,39 @@ void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
                 }
             }
         else{
-            edm::LogVerbatim("SimMerging") << "Found root: " << node->trackid_;
-            roots.emplace_back(node);
+            edm::LogVerbatim("SimMerging") << "Found parentless particle: " << node->trackid_;
+            root->addChild(node);
+            node->setParent(root);
             }
         }
 
-    Node* root = roots[0];
+#ifdef EDM_ML_DEBUG
     edm::LogVerbatim("SimMerging") << "Printing root " << root->trackid_;
     edm::LogVerbatim("SimMerging") << root->stringrep() << "\n";
-
-    // edm::LogVerbatim("SimMerging") << "Printing root " << root->trackid_ << " by recursive traversal";
-    // edm::LogVerbatim("SimMerging") << dfs_stringrep(root);
-
     edm::LogVerbatim("SimMerging") << "Trimming tree...";
+#endif
+
     trim_tree(root);
+
+#ifdef EDM_ML_DEBUG
     edm::LogVerbatim("SimMerging") << "Printing root " << root->trackid_ << " after trimming";
     edm::LogVerbatim("SimMerging") << root->stringrep() << "\n";
-
     edm::LogVerbatim("SimMerging") << "Running merging algo...";
+#endif
+
     merging_algo_Mar03(root);
+
+#ifdef EDM_ML_DEBUG
     edm::LogVerbatim("SimMerging") << "Printing root " << root->trackid_ << " after merging_algo_Mar03";
     edm::LogVerbatim("SimMerging") << root->stringrep() << "\n";
-    
+#endif
+
+    // Fill the output; the clusters are the remaining nodes (except the root)
+    for(auto cluster : root->children_){
+        output->push_back(cluster->mergedTrackIds_);
+        }
     iEvent.put(std::move(output));
+    delete root;
     }
 
 DEFINE_FWK_MODULE(simmerger);
