@@ -413,8 +413,10 @@ bool merge_leafparent_Mar03(Node* leafparent, float maxr=10.){
             << "    Merging " << pairToMerge.second->trackid_
             << " into " << pairToMerge.first->trackid_
             ;
-        // Bookkeep that the track is merged in
-        pairToMerge.first->mergedTrackIds_.push_back(pairToMerge.second->trackid_);
+        // Bookkeep that the track (and any previously merged tracks) is merged in
+        for (auto trackid : pairToMerge.second->mergedTrackIds_){
+            pairToMerge.first->mergedTrackIds_.push_back(trackid);
+            }
         // Move children
         for(auto child : pairToMerge.second->children_){
             pairToMerge.first->addChild(child);
