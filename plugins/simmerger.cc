@@ -3,13 +3,13 @@
 #include <cstdlib>
 #include <iostream>
 #include <stack>
-#include <map>
+#include <unordered_map>
 #include <sstream>
 #include <utility>
 #include <set>
 #include <cmath>
 using std::vector;
-using std::map;
+using std::unordered_map;
 using std::pair;
 
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -17,11 +17,14 @@ using std::pair;
 #include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/MakerMacros.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
+#include "DataFormats/Common/interface/Ref.h"
 
 #include "SimDataFormats/Track/interface/SimTrack.h"
 #include "SimDataFormats/Vertex/interface/SimVertex.h"
 #include "SimDataFormats/Track/interface/SimTrackContainer.h"
 #include "SimDataFormats/Vertex/interface/SimVertexContainer.h"
+#include "SimDataFormats/CaloAnalysis/interface/SimClusterFwd.h"
+#include "SimDataFormats/CaloAnalysis/interface/SimCluster.h"
 
 #include "RecoLocalCalo/HGCalRecAlgos/interface/RecHitTools.h"
 
@@ -517,6 +520,8 @@ class simmerger : public edm::stream::EDProducer<> {
     public:
         explicit simmerger(const edm::ParameterSet&);
         ~simmerger() {}
+        SimCluster mergedSimClusterFromTrackIds(std::vector<int>& trackIds, 
+            const edm::Association<SimClusterCollection>& simTrackToSimCluster);
     private:
         virtual void produce(edm::Event&, const edm::EventSetup&) override;
         void beginRun(const edm::Run&, const edm::EventSetup&) override {}
@@ -526,6 +531,9 @@ class simmerger : public edm::stream::EDProducer<> {
         edm::EDGetTokenT<edm::View<PCaloHit>> hgcalHEbackHitsToken_;
         edm::EDGetTokenT<edm::SimTrackContainer> tokenSimTracks;
         edm::EDGetTokenT<edm::SimVertexContainer> tokenSimVertices;
+        edm::EDGetTokenT<SimClusterCollection> simClustersToken_;
+        edm::EDGetTokenT<edm::Association<SimClusterCollection>> simTrackToSimClusterToken_;
+        unordered_map<unsigned int, SimTrackRef> trackIdToTrackRef_;
     };
 
 
@@ -534,18 +542,32 @@ simmerger::simmerger(const edm::ParameterSet& iConfig) :
     hgcalHEfrontHitsToken_(consumes<edm::View<PCaloHit>>(edm::InputTag("g4SimHits", "HGCHitsHEfront"))),
     hgcalHEbackHitsToken_(consumes<edm::View<PCaloHit>>(edm::InputTag("g4SimHits", "HGCHitsHEback"))),
     tokenSimTracks(consumes<edm::SimTrackContainer>(edm::InputTag("g4SimHits"))),
-    tokenSimVertices(consumes<edm::SimVertexContainer>(edm::InputTag("g4SimHits")))
+    tokenSimVertices(consumes<edm::SimVertexContainer>(edm::InputTag("g4SimHits"))),
+    simClustersToken_(consumes<SimClusterCollection>(edm::InputTag("mix:MergedCaloTruth"))),
+    simTrackToSimClusterToken_(consumes<edm::Association<SimClusterCollection>>(edm::InputTag("mix:simTrackToSimCluster")))
     {
-    produces<vector<vector<int>>>();
+    produces<SimClusterCollection>();
+    produces<edm::Association<SimClusterCollection>>();
     }
 
+SimCluster simmerger::mergedSimClusterFromTrackIds(std::vector<int>& trackIds, 
+    const edm::Association<SimClusterCollection>& simTrackToSimCluster) {
+    SimCluster sc; 
+    for (auto tid : trackIds) {
+        if (trackIdToTrackRef_.find(tid) == trackIdToTrackRef_.end())
+            throw cms::Exception("SimClusterTreeMerger") << "Failed to find a trackId in the TrackMap.";
+        sc += *simTrackToSimCluster[trackIdToTrackRef_[tid]];
+    }
+    return sc;
+}
 
 void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {  
     edm::ESHandle<CaloGeometry> geom;
     iSetup.get<CaloGeometryRecord>().get(geom);
     hgcalRecHitToolInstance_.setGeometry(*geom);
+    trackIdToTrackRef_.clear();
 
-    std::unique_ptr<vector<vector<int>>> output(new vector<vector<int>>);
+    auto output = std::make_unique<SimClusterCollection>();
 
     // Create Hit instances
     vector<Hit> hits;
@@ -576,9 +598,11 @@ void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     iEvent.getByLabel("g4SimHits", handleSimVertices);
 
     edm::LogVerbatim("SimMerging") << "Building map";
-    map<int, Node> trackid_to_node;
-    for(const auto& track : *(handleSimTracks.product())){
-        trackid_to_node.emplace(track.trackId(), Node(track.trackId(), track.momentum().E(), track.type()));
+    unordered_map<int, Node> trackid_to_node;
+    for(size_t i = 0; i < handleSimTracks->size(); i++){
+        SimTrackRef track(handleSimTracks, i);
+        trackid_to_node.emplace(track->trackId(), Node(track->trackId(), track->momentum().E(), track->type()));
+        trackIdToTrackRef_[track->trackId()] = track;
         }
 
     edm::LogVerbatim("SimMerging") << "Adding hits to nodes";
@@ -588,7 +612,7 @@ void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
 
     edm::LogVerbatim("SimMerging") << "Building tree";
     Node* root(new Node());
-    for(const auto& track : *(handleSimTracks.product())){
+    for(const auto& track : *handleSimTracks){
         int trackid = track.trackId();
         Node* node = &(trackid_to_node[trackid]);
         // Have to get parent info via the SimVertex
@@ -641,12 +665,37 @@ void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     edm::LogVerbatim("SimMerging") << "Printing root " << root->trackid_ << " after merging_algo_Mar03";
     edm::LogVerbatim("SimMerging") << root->stringrep() << "\n";
 #endif
+    edm::Handle<edm::Association<SimClusterCollection>> simTrackToSimClusterHandle;
+    iEvent.getByToken(simTrackToSimClusterToken_, simTrackToSimClusterHandle);
+
+    edm::Handle<SimClusterCollection> simClusterHandle;
+    iEvent.getByToken(simClustersToken_, simClusterHandle);
 
     // Fill the output; the clusters are the remaining nodes (except the root)
-    for(auto cluster : root->children_){
-        output->push_back(cluster->mergedTrackIds_);
+    size_t i = 0;
+    std::vector<int> mergedIndices(simClusterHandle->size(), 0);
+    for(auto cluster : root->children_) {
+        SimCluster sc; 
+        for (auto tid : cluster->mergedTrackIds_) {
+            if (trackIdToTrackRef_.find(tid) == trackIdToTrackRef_.end())
+                throw cms::Exception("SimClusterTreeMerger") << "Failed to find a trackId in the TrackMap.";
+            const auto& unmerged = (*simTrackToSimClusterHandle)[trackIdToTrackRef_[tid]];
+            mergedIndices.at(unmerged.key()) = i;
+            sc += *unmerged;
         }
-    iEvent.put(std::move(output));
+        i++;
+		sc.setPdgId(cluster->pdgid_);
+        output->push_back(sc);
+        }
+
+    const auto& mergedSCHandle = iEvent.put(std::move(output));
+
+    auto assoc = std::make_unique<edm::Association<SimClusterCollection>>(mergedSCHandle);
+    edm::Association<SimClusterCollection>::Filler filler(*assoc);
+    filler.insert(simClusterHandle, mergedIndices.begin(), mergedIndices.end());
+    filler.fill();
+    iEvent.put(std::move(assoc));
+
     delete root;
     }
 
