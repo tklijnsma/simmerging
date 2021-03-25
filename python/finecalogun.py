@@ -1,4 +1,6 @@
 import FWCore.ParameterSet.Config as cms
+from Configuration.Generator.Pythia8CommonSettings_cfi import *
+from Configuration.Generator.Pythia8CUEP8M1Settings_cfi import *
 
 def parse_options():
     from FWCore.ParameterSet.VarParsing import VarParsing
@@ -193,6 +195,13 @@ def add_single_particle_gun(
     process,
     pdgid=-13, pt=100.
     ):
+    pythia_parameters = cms.PSet(parameterSets = cms.vstring())
+    if 1 <= abs(pdgid) <= 5:
+        pythia_parameters = cms.PSet(
+            pythia8CommonSettingsBlock,
+            pythia8CUEP8M1SettingsBlock,
+            parameterSets = cms.vstring('pythia8CommonSettings','pythia8CUEP8M1Settings')
+            )
     process.generator = cms.EDFilter("Pythia8PtGun",
         PGunParameters = cms.PSet(
             AddAntiParticle = cms.bool(True),
@@ -204,13 +213,12 @@ def add_single_particle_gun(
             MaxPt = cms.double(pt + 0.01),
             ParticleID = cms.vint32(pdgid),
             ),
-        PythiaParameters = cms.PSet(
-            parameterSets = cms.vstring()
-            ),
+        PythiaParameters = pythia_parameters,
         Verbosity = cms.untracked.int32(0),
         firstRun = cms.untracked.uint32(1),
         psethack = cms.string('single {0} pt {1}'.format(pdgid, int(pt)))
         )
+
 
 
 def add_debug_module(process, module_name='DoFineCalo'):
