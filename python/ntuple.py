@@ -1,3 +1,4 @@
+import os.path as osp
 import FWCore.ParameterSet.Config as cms
 from FWCore.ParameterSet.VarParsing import VarParsing
 options = VarParsing("analysis")
@@ -9,8 +10,8 @@ process.load('Configuration.StandardSequences.EndOfProcess_cff')
 process.load("Configuration.Geometry.GeometryExtended2026D71_cff")
 process.load('Configuration.Geometry.GeometryExtended2026D71Reco_cff')
 process.load('Configuration.StandardSequences.MagneticField_cff')
-process.source = cms.Source("PoolSource", fileNames = cms.untracked.vstring(options.inputFiles))
-output_file = options.inputFiles[0].replace('SIM', 'NTUPLE')
+process.source = cms.Source("PoolSource", fileNames=cms.untracked.vstring(options.inputFiles))
+output_file = osp.basename(options.inputFiles[0]).replace('SIM', 'NTUPLE')
 if output_file == options.inputFiles[0]:
     raise Exception('About to overwrite input!')
 process.TFileService = cms.Service("TFileService", fileName=cms.string(output_file))
