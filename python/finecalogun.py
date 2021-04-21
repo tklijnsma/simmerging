@@ -125,7 +125,7 @@ def init_process(options):
             outputlvl = 'NTUPLE' if options.ntuple else 'SIM',
             seed = options.seed,
             pdgid = abs(options.pdgid),
-            pt = int(options.pt),
+            pt = int(options.pt) if abs(options.pdgid) != 6 else 13000,
             date = strftime('%b%d'),
             finecalo = 'finecalo' if options.dofinecalo else 'nofine',
             nevents = options.maxEvents
@@ -202,23 +202,64 @@ def add_single_particle_gun(
             pythia8CUEP8M1SettingsBlock,
             parameterSets = cms.vstring('pythia8CommonSettings','pythia8CUEP8M1Settings')
             )
-    process.generator = cms.EDFilter("Pythia8PtGun",
-        PGunParameters = cms.PSet(
-            AddAntiParticle = cms.bool(True),
-            MinEta = cms.double(1.6),
-            MaxEta = cms.double(2.8),
-            MinPhi = cms.double(-3.14159265359),
-            MaxPhi = cms.double(3.14159265359),
-            MinPt = cms.double(pt - 0.01),
-            MaxPt = cms.double(pt + 0.01),
-            ParticleID = cms.vint32(pdgid),
-            ),
-        PythiaParameters = pythia_parameters,
-        Verbosity = cms.untracked.int32(0),
-        firstRun = cms.untracked.uint32(1),
-        psethack = cms.string('single {0} pt {1}'.format(pdgid, int(pt)))
-        )
-
+    if abs(pdgid) == 6:
+        # Treat this as ttbar rather than a single top gun
+        # THIS DOES NOT WORK, need to get a generator from a newer runTheMatrix workflow
+        process.generator = cms.EDFilter("Pythia8GeneratorFilter",
+            PythiaParameters = cms.PSet(
+                parameterSets = cms.vstring(
+                    'pythia8CommonSettings', 
+                    'pythia8CUEP8M1Settings', 
+                    'processParameters'
+                    ),
+                processParameters = cms.vstring(
+                    'Top:gg2ttbar = on ', 
+                    'Top:qqbar2ttbar = on ', 
+                    '6:m0 = 175 '
+                    ),
+                pythia8CUEP8M1Settings = cms.vstring(
+                    'Tune:pp 14', 
+                    'Tune:ee 7', 
+                    'MultipartonInteractions:pT0Ref=2.4024', 
+                    'MultipartonInteractions:ecmPow=0.25208', 
+                    'MultipartonInteractions:expPow=1.6'
+                    ),
+                pythia8CommonSettings = cms.vstring(
+                    'Tune:preferLHAPDF = 2', 
+                    'Main:timesAllowErrors = 10000', 
+                    'Check:epTolErr = 0.01', 
+                    'Beams:setProductionScalesFromLHEF = off', 
+                    'SLHA:keepSM = on', 
+                    'SLHA:minMassSM = 1000.', 
+                    'ParticleDecays:limitTau0 = on', 
+                    'ParticleDecays:tau0Max = 10', 
+                    'ParticleDecays:allowPhotonRadiation = on'
+                    )
+                ),
+            comEnergy = cms.double(13000.0),
+            filterEfficiency = cms.untracked.double(1.0),
+            maxEventsToPrint = cms.untracked.int32(0),
+            pythiaHepMCVerbosity = cms.untracked.bool(False),
+            pythiaPylistVerbosity = cms.untracked.int32(0)
+            )
+    else:
+        # Single particle gun (+anti)
+        process.generator = cms.EDFilter("Pythia8PtGun",
+            PGunParameters = cms.PSet(
+                AddAntiParticle = cms.bool(True),
+                MinEta = cms.double(1.6),
+                MaxEta = cms.double(2.8),
+                MinPhi = cms.double(-3.14159265359),
+                MaxPhi = cms.double(3.14159265359),
+                MinPt = cms.double(pt - 0.01),
+                MaxPt = cms.double(pt + 0.01),
+                ParticleID = cms.vint32(pdgid),
+                ),
+            PythiaParameters = pythia_parameters,
+            Verbosity = cms.untracked.int32(0),
+            firstRun = cms.untracked.uint32(1),
+            psethack = cms.string('single {0} pt {1}'.format(pdgid, int(pt)))
+            )
 
 
 def add_debug_module(process, module_name='DoFineCalo'):
