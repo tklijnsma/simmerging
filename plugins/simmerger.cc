@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <stack>
+#include <unordered_map>
 #include <map>
 #include <sstream>
 #include <utility>
@@ -11,6 +12,7 @@
 #include <numeric>
 using std::vector;
 using std::map;
+using std::unordered_map;
 using std::pair;
 
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -260,6 +262,7 @@ class Node {
             trackid_ = track.trackId();
             initial_energy_ = track.momentum().E();
             pdgid_ = track.type();
+            is_hadron_ = pdgid_ > 111;
             final_z_ = track.trackerSurfacePosition().z();
             merged_trackids_.push_back(trackid_);
             crossed_boundary_ = track.crossedBoundary();
@@ -276,6 +279,7 @@ class Node {
 
         /* Number of quantities that depend on the hits */
         void calculate_shower_variables(){
+            if (nhits() == 0) return;
             centroid_ = ::hitcentroid(hits_);
             axis_ = (centroid_-boundary_position_) / (centroid_-boundary_position_).norm();
 
@@ -297,33 +301,15 @@ class Node {
             apply_argsort_in_place(d_to_axis, order);
             vector<double> cumsum_energies_to_axis = cumsum(apply_argsort(energies, order));
 
-            edm::LogVerbatim("SimMerging") << "Shower variables for track " << trackid_ << ":";
-            if (crossed_boundary_) edm::LogVerbatim("SimMerging") << "boundary_position_=" << boundary_position_;
-            edm::LogVerbatim("SimMerging") << "centroid_=" << centroid_;
-            edm::LogVerbatim("SimMerging") << "axis_=" << axis_;
-            edm::LogVerbatim("SimMerging") << "nhits()=" << nhits();
-
-            // for (std::size_t i=0; i<cumsum_energies_to_axis.size(); ++i){
-            //     edm::LogVerbatim("SimMerging")
-            //         << i << ": " << d_to_axis[i]
-            //         << ", energy_fraction=" << cumsum_energies_to_axis[i]/total_energy
-            //         ;
-            //     }
-
             // Find the energy containment radii
             vector<double> thresholds = { .3, .75, .85 };
             for (std::size_t i = 0; i < cumsum_energies_to_axis.size()-1; ++i) {
                 double cumsum_this = cumsum_energies_to_axis[i] / total_energy;
                 double cumsum_next = cumsum_energies_to_axis[i+1] / total_energy;
                 for(auto threshold : thresholds){
-                    if (cumsum_next > threshold && cumsum_this < threshold){
-                        edm::LogVerbatim("SimMerging")
-                            << "Found radius for threshold " << threshold
-                            << " at i=" << i << ": " << d_to_axis[i+1]
-                            ;
+                    if (cumsum_next > threshold && cumsum_this < threshold)
                         // We just crossed a threshold, save the radius
                         energy_containment_radii_[threshold] = d_to_axis[i+1];
-                        }
                     }
                 }
 
@@ -351,17 +337,6 @@ class Node {
             // See https://en.wikipedia.org/wiki/Rotation_matrix#In_three_dimensions
             double dx = atan2(axis_.y_, axis_.z_);
             double dy = -asin(axis_.x_ / axis_.norm());
-            edm::LogVerbatim("SimMerging") << "dx=" << dx << ", dy=" << dy;
-            // rotation_ = RotMat3D(
-            //     1., 0., 0.,
-            //     0., cos(dx), -sin(dx),
-            //     0., sin(dx), cos(dx)
-            //     )
-            //     .dot(RotMat3D(
-            //         cos(dy), 0., sin(dy),
-            //         0., 1., 0.,
-            //         -sin(dy), 0., cos(dy)
-            //         ));
             rotation_ = RotMat3D(
                 cos(dy), 0., sin(dy),
                 0., 1., 0.,
@@ -372,7 +347,6 @@ class Node {
                     0., cos(dx), -sin(dx),
                     0., sin(dx), cos(dx)
                     ));
-            edm::LogVerbatim("SimMerging") << "rotmat=\n" << rotation_;
 
             inv_rotation_ = rotation_.transpose();
             }
@@ -543,7 +517,7 @@ class Node {
             for(auto hit : hits_) hit->z_ *= -1.;
             }
 
-        bool crossed_boundary_;
+        bool crossed_boundary_, is_hadron_;
         int trackid_, pdgid_;
         double initial_energy_, final_z_;
         math::XYZTLorentzVectorF boundary_momentum_;
@@ -600,35 +574,17 @@ b1-----------------e1
      <---------------
 */
 double longitudinal_distance(Node& t1, Node& t2){
-    edm::LogVerbatim("SimMerging")
-        << "t1.q10=" << t1.energy_containment_longitudinally_[.1]
-        << ", t1.q90=" << t1.energy_containment_longitudinally_[.9]
-        << ", t2.q10=" << t2.energy_containment_longitudinally_[.1]
-        << ", t2.q90=" << t2.energy_containment_longitudinally_[.9]
-        ;
     // Vectors of the 10% and 90% longitudinal energy quantiles
     Vector3D v1_10 = t1.boundary_position_ + t1.energy_containment_longitudinally_[.1] * t1.axis_;
     Vector3D v1_90 = t1.boundary_position_ + t1.energy_containment_longitudinally_[.9] * t1.axis_;
     Vector3D v2_10 = t2.boundary_position_ + t2.energy_containment_longitudinally_[.1] * t2.axis_;
     Vector3D v2_90 = t2.boundary_position_ + t2.energy_containment_longitudinally_[.9] * t2.axis_;
-    edm::LogVerbatim("SimMerging")
-        << "t1.v_q10=" << v1_10
-        << ", t1.v_q90=" << v1_90
-        << ", t2.v_q10=" << v2_10
-        << ", t2.v_q90=" << v2_90
-        ;
     // Rotate them
     Vector3D origin = t1.boundary_position_;
     Vector3D rb1 = t1.rotation_.dot(v1_10 - origin);
     Vector3D re1 = t1.rotation_.dot(v1_90 - origin);
     Vector3D rb2 = t1.rotation_.dot(v2_10 - origin);
     Vector3D re2 = t1.rotation_.dot(v2_90 - origin);
-    edm::LogVerbatim("SimMerging")
-        << "rb1=" << rb1
-        << ", re1=" << re1
-        << ", rb2=" << rb2
-        << ", re2=" << re2
-        ;
     // Fix 1 to be the lowest in z after rotating
     if (rb2.z_ < rb1.z_){ std::swap(rb1, rb2); std::swap(re1, re2); }
     return rb2.z_ - re1.z_;
@@ -667,19 +623,8 @@ bool is_inside(const vector<double>& px, const vector<double>& py, double x, dou
 double polygon_overlap(
     const vector<double>& x1, const vector<double>& y1,
     const vector<double>& x2, const vector<double>& y2,
-    int nbins=30
+    int nbins=50
     ){
-
-    edm::LogVerbatim("SimMerging") << "Inside polygon_overlap";
-    // edm::LogVerbatim("SimMerging") << "x1:";
-    // for(auto val : x1) edm::LogVerbatim("SimMerging") << val;
-    // edm::LogVerbatim("SimMerging") << "y1:";
-    // for(auto val : y1) edm::LogVerbatim("SimMerging") << val;
-    // edm::LogVerbatim("SimMerging") << "x2:";
-    // for(auto val : x2) edm::LogVerbatim("SimMerging") << val;
-    // edm::LogVerbatim("SimMerging") << "y2:";
-    // for(auto val : y2) edm::LogVerbatim("SimMerging") << val;
-
     // First determine extrema
     auto x1_minmax = std::minmax_element(x1.begin(), x1.end());
     auto x2_minmax = std::minmax_element(x2.begin(), x2.end());
@@ -692,49 +637,19 @@ double polygon_overlap(
     double x_binwidth = (xmax-xmin) / double(nbins);
     double y_binwidth = (ymax-ymin) / double(nbins);
 
-    edm::LogVerbatim("SimMerging")
-        << "x1_min=" << *(x1_minmax.first)
-        << ", x1_max=" << *(x1_minmax.second)
-        << ", y1_min=" << *(y1_minmax.first)
-        << ", y1_max=" << *(y1_minmax.second)
-        ;
-    edm::LogVerbatim("SimMerging")
-        << "x2_min=" << *(x2_minmax.first)
-        << ", x2_max=" << *(x2_minmax.second)
-        << ", y2_min=" << *(y2_minmax.first)
-        << ", y2_max=" << *(y2_minmax.second)
-        ;
-    edm::LogVerbatim("SimMerging")
-        << "xmin=" << xmin
-        << ", xmax=" << xmax
-        << ", ymin=" << ymin
-        << ", ymax=" << ymax
-        ;
-
     // Count how many cells in a grid are inside polygon 2 and in both polygons
     int is_inside_2 = 0, is_inside_1_and_2 = 0;
     for (int i = 0; i < nbins; ++i){
         for (int j = 0; j < nbins; ++j){
             double x = xmin + i*x_binwidth + .5*x_binwidth;
             double y = ymin + j*y_binwidth + .5*y_binwidth;
-            // edm::LogVerbatim("SimMerging") << "x=" << x << ", y=" << y;
             if (is_inside(x2, y2, x, y)){
-                // edm::LogVerbatim("SimMerging") << "  is inside 2";
                 is_inside_2++;
                 if (is_inside(x1, y1, x, y)) is_inside_1_and_2++;
                 }
             }
         }
-
-    edm::LogVerbatim("SimMerging")
-        << "is_inside_2=" << is_inside_2
-        << ", is_inside_1_and_2=" << is_inside_1_and_2
-        ;
     if (is_inside_1_and_2 == 0) return 0.;
-    edm::LogVerbatim("SimMerging")
-        << "is_inside_1_and_2/is_inside_2="
-        << double(is_inside_1_and_2) / double(is_inside_2)
-        ;
     return double(is_inside_1_and_2) / double(is_inside_2);
     }
 /* Reimplementation of function above with different input */
@@ -754,46 +669,78 @@ double polygon_overlap(vector<Vector3D>& polygon1, vector<Vector3D>& polygon2, i
 
 pair<double, double> calculate_shower_overlap(Node& t1, Node& t2){
     if (t1.boundary_momentum_.E() < t2.boundary_momentum_.E()) std::swap(t1,t2);
-
-    double f_radius = .75;
-    double t1_r = t1.energy_containment_radii_[f_radius];
-    double t2_r = t2.energy_containment_radii_[f_radius];
-
-#ifdef EDM_ML_DEBUG
-    edm::LogVerbatim("SimMerging") << "t1_r=" << t1_r << ", t2_r=" << t2_r;
-#endif
+    double f_radius;
+    if(t1.is_hadron_ != t2.is_hadron_) f_radius = .3;
+    else if (t1.is_hadron_ && t2.is_hadron_) f_radius = .75;
+    else f_radius = .85;
+    double t1_r = std::max(t1.energy_containment_radii_[f_radius], 1.0);
+    double t2_r = std::max(t2.energy_containment_radii_[f_radius], 1.0);
 
     Vector3D t1_b = t1.boundary_position_;
     Vector3D t1_e = t1.centroid_;
     Vector3D t2_b = t2.boundary_position_;
     Vector3D t2_e = t2.centroid_;
 
-    Vector3D t1_rb(0., 0., 0.);
     Vector3D t1_re = t1.rotation_.dot(t1_e-t1_b);
-
-    Vector3D t2_raxis = t1.rotation_.dot(t2.axis_);
-    Vector3D t2_rb = t1.rotation_.dot(t2_b-t1_b);
-    Vector3D t2_re = t1.rotation_.dot(t2_e-t1_b);
-
-    edm::LogVerbatim("SimMerging") << "t1_rb=" << t1_rb << ", t1_re=" << t1_re;
-    edm::LogVerbatim("SimMerging") << "t2_rb=" << t2_rb << ", t2_re=" << t2_re;
+    // Vector3D t2_rb = t1.rotation_.dot(t2_b-t1_b);
+    // Vector3D t2_re = t1.rotation_.dot(t2_e-t1_b);
 
     vector<Vector3D> t1_rcircle = t1.inv_rotation_.dot(get_circle(t1_r)) + t1_re;
     vector<Vector3D> t2_rcircle = t1.rotation_.dot(
         t2.inv_rotation_.dot(get_circle(t2_r)) + t2_e - t1_b
         );
-
-    // edm::LogVerbatim("SimMerging") << "Circle 1:";
-    // for(auto p : t1_rcircle)
-    //     edm::LogVerbatim("SimMerging") << "x=" << p.x_ << ", y=" << p.y_ << ", z=" << p.z_;
-    // edm::LogVerbatim("SimMerging") << "Circle 2:";
-    // for(auto p : t2_rcircle)
-    //     edm::LogVerbatim("SimMerging") << "x=" << p.x_ << ", y=" << p.y_ << ", z=" << p.z_;
-
     double rcircle_overlap = polygon_overlap(t1_rcircle, t2_rcircle);
     double deltaz = longitudinal_distance(t1, t2);
     return std::make_pair(rcircle_overlap, deltaz);
     }
+
+
+class CachedOverlapFn {
+    public:
+        CachedOverlapFn() {}
+        ~CachedOverlapFn() {}
+
+        pair<double, double> get(Node* t1, Node* t2){
+            if (t1->boundary_momentum_.E() < t2->boundary_momentum_.E()) std::swap(t1,t2);
+            pair<int,int> p = std::make_pair(t1->trackid_, t2->trackid_);
+            if (cache_.count(p) == 0)
+                cache_[p] = calculate_shower_overlap(*t1, *t2);
+            return cache_[p];
+            }
+
+        /* Clears the cache for two tracks in one go */
+        void clear(Node* t1, Node* t2){
+            auto it = cache_.begin();
+            while(it != cache_.end()){
+                auto key = (*it).first;
+                if (
+                    key.first == t1->trackid_ || key.second == t1->trackid_ ||
+                    key.first == t2->trackid_ || key.second == t2->trackid_
+                    )
+                    it = cache_.erase(it);
+                else
+                    it++;
+                }
+            }
+
+        void insert(int i, int j, double a, double b){
+            cache_[std::make_pair(i,j)] = std::make_pair(a,b);
+            }
+
+        std::string print() const {
+            std::stringstream ss;
+            for(auto it: cache_){
+                ss  << "(" << it.first.first << "," << it.first.second << ") = "
+                    << it.second.first << ", " << it.second.second << "\n"
+                    ;
+                }
+            return ss.str();
+            }
+
+    private:
+        map<pair<int,int>, pair<double,double>> cache_;  
+    };
+
 
 
 /* Remove a node from its parent's children vector */
@@ -893,9 +840,6 @@ void trim_tree(Node* root){
             it++;
             }
         }
-    // // Debug printout
-    // edm::LogVerbatim("SimMerging") << "Printing root " << root->trackid_ << " after step1 trimming";
-    // edm::LogVerbatim("SimMerging") << root->stringrep();
     // Second trimming step: Remove 'intermediate' tracks
     // (i.e. tracks with no hits, 1 child, and 1 parent)
     // In this case it's easier to put the whole traversal in memory first,
@@ -917,137 +861,156 @@ double distance(Node* left, Node* right){
         );
     }
 
-// bool merge_leafparent_Mar03(Node* leafparent, double maxr=10.){
-//     edm::LogVerbatim("SimMerging") << "  Merging leafparent " << leafparent->trackid_;
-//     bool didUpdate = false;
-//     // Copy list of potentially mergeable nodes
-//     vector<Node*> mergeable = leafparent->children_;
-//     leafparent->children_.clear();
-//     // Parent itself can be mergeable, if it has hits and is not a root
-//     if (leafparent->hasParent() && leafparent->hasHits()) mergeable.push_back(leafparent);
-//     // Start merging
-//     while(true){
-//         bool didUpdateThisIteration = false;
-//         double minr = maxr;
-//         pair<Node*,Node*> pairToMerge;
-//         // Compute all distances between clusters
-//         int nMergeable = mergeable.size();
-//         for (int i = 0; i < nMergeable; ++i){
-//             Node* left = mergeable[i];
-//             for (int j = i+1; j < nMergeable; ++j){
-//                 Node* right = mergeable[j];
-//                 double r = distance(left, right);
-//                 if (r < minr){
-//                     minr = r;
-//                     pairToMerge = (left->initial_energy_ > right->initial_energy_) ?
-//                         std::make_pair(left, right) : std::make_pair(right, left);
-//                     didUpdate = true;
-//                     didUpdateThisIteration = true;
-//                     }
-//                 }
-//             }
-//         if (!didUpdateThisIteration) break; // Nothing to merge this iteration
-//         // Now do the merging
-//         edm::LogVerbatim("SimMerging")
-//             << "    Merging " << pairToMerge.second->trackid_
-//             << " into " << pairToMerge.first->trackid_
-//             ;
-//         // Bookkeep that the track (and any previously merged tracks) is merged in
-//         for (auto trackid : pairToMerge.second->merged_trackids_){
-//             pairToMerge.first->merged_trackids_.push_back(trackid);
-//             }
-//         // Move children
-//         for(auto child : pairToMerge.second->children_){
-//             pairToMerge.first->addChild(child);
-//             child->setParent(pairToMerge.first);
-//             }
-//         pairToMerge.second->children_.clear();
-//         // Move hits
-//         for(auto hit : pairToMerge.second->hits_) pairToMerge.first->addHit(hit);
-//         pairToMerge.second->hits_.clear();
-//         // Delete the merged-away node
-//         break_from_parent(pairToMerge.second);
-//         mergeable.erase(
-//             std::remove(mergeable.begin(), mergeable.end(), pairToMerge.second),
-//             mergeable.end()
-//             );
-//         // Recompute the hitcentroid for newly merged node, now that it has more hits
-//         pairToMerge.first->recomputeHitcentroid();
-//         }
-//     // Make a string representation of the mergeable nodes for debugging
-//     std::string mergeableStr = "";
-//     if(mergeable.size()){
-//         std::stringstream ss;
-//         for(auto child : mergeable) ss << child->trackid_ << ", ";
-//         mergeableStr = ss.str();
-//         mergeableStr.pop_back(); mergeableStr.pop_back(); // Remove trailing comma
-//         }
-//     // All possible merging now done;
-//     // Next steps depend on whether the passed node was a root
-//     if (!(leafparent->hasParent())){
-//         leafparent->children_ = mergeable;
-//         if(didUpdate) {
-//             // Simply overwrite with the merged nodes
-//             edm::LogVerbatim("SimMerging")
-//                 << "    Root " << leafparent->trackid_
-//                 << " is set to have the following children: "
-//                 << mergeableStr;
-//             }
-//         else{
-//             edm::LogVerbatim("SimMerging")
-//                 << "    Root " << leafparent->trackid_
-//                 << ": no further merging possible";
-//             }
-//         return didUpdate;
-//         }
-//     else {
-//         // Special case: If the leafparent had no hits (and was thus not included as
-//         // a mergeable node), AND all nodes were merged into one cluster, assign the 
-//         // pdgid of the leafparent to the remaining node
-//         if(
-//             !(leafparent->hasHits())
-//             && mergeable.size()==1
-//             && mergeable[0]->pdgid_!=leafparent->pdgid_
-//             ){
-//             edm::LogVerbatim("SimMerging")
-//                 << "    Using leafparent pdgid " << leafparent->pdgid_
-//                 << " for track " << mergeable[0]->trackid_
-//                 << " (rather than " << mergeable[0]->pdgid_
-//                 << ") since all nodes were merged into one";
-//             mergeable[0]->pdgid_ = leafparent->pdgid_;
-//             }
-//         // Replace the node in the parent's children list with all merged nodes
-//         Node* parent = leafparent->parent_;
-//         edm::LogVerbatim("SimMerging")
-//             << "    Adding the following children to parent " << parent->trackid_
-//             << ": " << mergeableStr;
-//         break_from_parent(leafparent);
-//         for(auto child : mergeable){
-//             parent->addChild(child);
-//             child->setParent(parent);
-//             }
-//         return true;
-//         }
-//     }
+bool merge_leafparent(Node* leafparent, double min_overlap, CachedOverlapFn& overlapfn){
+    edm::LogVerbatim("SimMerging") << "  Merging leafparent " << leafparent->trackid_;
+    bool didUpdate = false;
+    // Copy list of potentially mergeable nodes
+    vector<Node*> mergeable = leafparent->children_;
+    leafparent->children_.clear();
+    // Parent itself can be mergeable, if it has hits and is not a root
+    if (leafparent->hasParent() && leafparent->hasHits()) mergeable.push_back(leafparent);
+    // Start merging
+    while(true){
+        bool break_early = false;
+        bool didUpdateThisIteration = false;
+        double current_max_overlap = min_overlap;
+        pair<Node*,Node*> pairToMerge;
+        // Compute all distances between clusters
+        int nMergeable = mergeable.size();
+        for (int i = 0; i < nMergeable; ++i){
+            Node* left = mergeable[i];
+            for (int j = i+1; j < nMergeable; ++j){
+                Node* right = mergeable[j];
+                pair<double, double> p = overlapfn.get(left, right);
+                double overlap = p.first;
+                double deltaz = p.second;
+                if (overlap > current_max_overlap && deltaz < 10.){
+                    current_max_overlap = overlap;
+                    pairToMerge = (left->initial_energy_ > right->initial_energy_) ?
+                        std::make_pair(left, right) : std::make_pair(right, left);
+                    didUpdate = true;
+                    didUpdateThisIteration = true;
+                    if (overlap == 1.){
+                        // It can't get higher than 1 anyway
+                        break_early = true;
+                        break;
+                        }
+                    }
+                // double r = distance(left, right);
+                // if (r < minr){
+                //     minr = r;
+                //     pairToMerge = (left->initial_energy_ > right->initial_energy_) ?
+                //         std::make_pair(left, right) : std::make_pair(right, left);
+                //     didUpdate = true;
+                //     didUpdateThisIteration = true;
+                //     }
+                }
+            if (break_early) break;
+            }
+        if (!didUpdateThisIteration) break; // Nothing to merge this iteration
+        // Now do the merging
+        edm::LogVerbatim("SimMerging")
+            << "    Merging " << pairToMerge.second->trackid_
+            << " into " << pairToMerge.first->trackid_
+            ;
+        // Bookkeep that the track (and any previously merged tracks) is merged in
+        for (auto trackid : pairToMerge.second->merged_trackids_){
+            pairToMerge.first->merged_trackids_.push_back(trackid);
+            }
+        // Move children
+        for(auto child : pairToMerge.second->children_){
+            pairToMerge.first->addChild(child);
+            child->setParent(pairToMerge.first);
+            }
+        pairToMerge.second->children_.clear();
+        // Move hits
+        for(auto hit : pairToMerge.second->hits_) pairToMerge.first->addHit(hit);
+        pairToMerge.second->hits_.clear();
+        // Delete the merged-away node
+        break_from_parent(pairToMerge.second);
+        mergeable.erase(
+            std::remove(mergeable.begin(), mergeable.end(), pairToMerge.second),
+            mergeable.end()
+            );
+        // Recompute the shower variables for newly merged node, now that it has more hits
+        pairToMerge.first->calculate_shower_variables();
+        overlapfn.clear(pairToMerge.first, pairToMerge.second);
+        }
+    // Make a string representation of the mergeable nodes for debugging
+    std::string mergeableStr = "";
+    if(mergeable.size()){
+        std::stringstream ss;
+        for(auto child : mergeable) ss << child->trackid_ << ", ";
+        mergeableStr = ss.str();
+        mergeableStr.pop_back(); mergeableStr.pop_back(); // Remove trailing comma
+        }
+    // All possible merging now done;
+    // Next steps depend on whether the passed node was a root
+    if (!(leafparent->hasParent())){
+        leafparent->children_ = mergeable;
+        if(didUpdate) {
+            // Simply overwrite with the merged nodes
+            edm::LogVerbatim("SimMerging")
+                << "    Root " << leafparent->trackid_
+                << " is set to have the following children: "
+                << mergeableStr;
+            }
+        else{
+            edm::LogVerbatim("SimMerging")
+                << "    Root " << leafparent->trackid_
+                << ": no further merging possible";
+            }
+        return didUpdate;
+        }
+    else {
+        // Special case: If the leafparent had no hits (and was thus not included as
+        // a mergeable node), AND all nodes were merged into one cluster, assign the 
+        // pdgid of the leafparent to the remaining node
+        if(
+            !(leafparent->hasHits())
+            && mergeable.size()==1
+            && mergeable[0]->pdgid_!=leafparent->pdgid_
+            ){
+            edm::LogVerbatim("SimMerging")
+                << "    Using leafparent pdgid " << leafparent->pdgid_
+                << " for track " << mergeable[0]->trackid_
+                << " (rather than " << mergeable[0]->pdgid_
+                << ") since all nodes were merged into one";
+            mergeable[0]->pdgid_ = leafparent->pdgid_;
+            }
+        // Replace the node in the parent's children list with all merged nodes
+        Node* parent = leafparent->parent_;
+        edm::LogVerbatim("SimMerging")
+            << "    Adding the following children to parent " << parent->trackid_
+            << ": " << mergeableStr;
+        break_from_parent(leafparent);
+        for(auto child : mergeable){
+            parent->addChild(child);
+            child->setParent(parent);
+            }
+        return true;
+        }
+    }
 
-// void merging_algo_Mar03(Node* root){
-//     int iIteration = -1;
-//     bool didUpdate = true;
-//     while(didUpdate){
-//         iIteration++;
-//         edm::LogVerbatim("SimMerging") << "Iteration " << iIteration;
-//         // Build list of leaf parents in memory
-//         vector<Node*> leafparents;
-//         for (auto& node : *root){
-//             if (!(node.isLeafParent())) continue;
-//             leafparents.push_back(&node);
-//             }
-//         for (auto node : leafparents){
-//             didUpdate = merge_leafparent_Mar03(node);
-//             }
-//         }
-//     edm::LogVerbatim("SimMerging") << "Done after iteration " << iIteration;
-//     }
+void merging_algo(Node* root){
+    CachedOverlapFn overlapfn;
+    int iIteration = -1;
+    bool didUpdate = true;
+    while(didUpdate){
+        iIteration++;
+        edm::LogVerbatim("SimMerging") << "Iteration " << iIteration;
+        // Build list of leaf parents in memory
+        vector<Node*> leafparents;
+        for (auto& node : *root){
+            if (!(node.isLeafParent())) continue;
+            leafparents.push_back(&node);
+            }
+        for (auto node : leafparents){
+            didUpdate = merge_leafparent(node, .3, overlapfn);
+            }
+        }
+    edm::LogVerbatim("SimMerging") << "Done after iteration " << iIteration;
+    }
 
 // _______________________________________________
 
@@ -1085,20 +1048,6 @@ void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
     hgcalRecHitToolInstance_.setGeometry(*geom);
 
     std::unique_ptr<vector<vector<int>>> output(new vector<vector<int>>);
-
-
-    // // Test is_inside algo
-    // vector<Vector3D> c1 = get_circle(1.);
-    // vector<double> c1_x, c1_y;
-    // for(auto v: c1){
-    //     c1_x.push_back(v.x_);
-    //     c1_y.push_back(v.y_);
-    //     }
-    // edm::LogVerbatim("SimMerging") << is_inside(c1_x, c1_y, .5, .5);
-    // edm::LogVerbatim("SimMerging") << is_inside(c1_x, c1_y, .9, .9);
-    // edm::LogVerbatim("SimMerging") << is_inside(c1_x, c1_y, .0, 1.1);
-    // edm::LogVerbatim("SimMerging") << is_inside(c1_x, c1_y, .0, 0.9);
-
 
     // Create Hit instances
     vector<Hit> hits;
@@ -1206,43 +1155,44 @@ void simmerger::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
 #ifdef EDM_ML_DEBUG
     edm::LogVerbatim("SimMerging") << "Flipping all z's in negative endcap for merging algorithm";
 #endif
-    for (auto& node : *neg) node.flipz();
+    for (auto& node : *neg){
+        node.flipz();
+        node.calculate_shower_variables();
+        }
 
-    Node* t1 = find_in_tree(neg, 411358);
-    Node* t2 = find_in_tree(neg, 419854);
+    // Testing code for development
+    // Node* t1 = find_in_tree(neg, 411358);
+    // Node* t2 = find_in_tree(neg, 419854);
+    // edm::LogVerbatim("SimMerging") << "Found track " << t1->trackid_;
+    // edm::LogVerbatim("SimMerging") << "Found track " << t2->trackid_;
+    // t1->calculate_shower_variables();
+    // t2->calculate_shower_variables();
 
-    edm::LogVerbatim("SimMerging") << "Found track " << t1->trackid_;
-    edm::LogVerbatim("SimMerging") << "Found track " << t2->trackid_;
+    // CachedOverlapFn overlapfn;
+    // overlapfn.get(t1, t2);;
+    // pair<double,double> overlap = calculate_shower_overlap(*t1, *t2);
+    // edm::LogVerbatim("SimMerging")
+    //     << "Overlap: " << overlap.first
+    //     << ", dz: " << overlap.second
+    //     ;
 
-    t1->calculate_shower_variables();
-    t2->calculate_shower_variables();
+#ifdef EDM_ML_DEBUG
+    edm::LogVerbatim("SimMerging") << "Running merging algo...";
+#endif
+    merging_algo(neg);
 
-    pair<double,double> overlap = calculate_shower_overlap(*t1, *t2);
+#ifdef EDM_ML_DEBUG
+    edm::LogVerbatim("SimMerging") << "Printing neg " << neg->trackid_ << " after merging_algo";
+    edm::LogVerbatim("SimMerging") << neg->stringrep() << "\n";
+#endif
 
-    edm::LogVerbatim("SimMerging")
-        << "Overlap: " << overlap.first
-        << ", dz: " << overlap.second
-        ;
+    for (auto& node : *pos) node.calculate_shower_variables();
+    merging_algo(pos);
 
+    // Fill the output; the clusters are the remaining nodes (except the root)
+    for(auto cluster : pos->children_) output->push_back(cluster->merged_trackids_);
+    for(auto cluster : neg->children_) output->push_back(cluster->merged_trackids_);
 
-
-
-
-
-// #ifdef EDM_ML_DEBUG
-//     edm::LogVerbatim("SimMerging") << "Running merging algo...";
-// #endif
-//     merging_algo_Mar03(root);
-
-// #ifdef EDM_ML_DEBUG
-//     edm::LogVerbatim("SimMerging") << "Printing root " << root->trackid_ << " after merging_algo_Mar03";
-//     edm::LogVerbatim("SimMerging") << root->stringrep() << "\n";
-// #endif
-
-//     // Fill the output; the clusters are the remaining nodes (except the root)
-//     for(auto cluster : root->children_){
-//         output->push_back(cluster->merged_trackids_);
-//         }
     iEvent.put(std::move(output));
     delete root;
     delete pos;
