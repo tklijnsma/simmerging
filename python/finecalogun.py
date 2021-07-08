@@ -127,7 +127,7 @@ def init_process(options):
             outputlvl = 'NTUPLE' if options.ntuple else 'SIM',
             seed = options.seed,
             pdgid = abs(options.pdgid),
-            pt = int(options.pt) if abs(options.pdgid) != 6 else 13000,
+            pt = int(options.pt) if abs(options.pdgid) != 6 else 14000,
             date = strftime('%b%d'),
             finecalo = 'finecalo' if options.dofinecalo else 'nofine',
             nevents = options.maxEvents
@@ -205,45 +205,59 @@ def add_single_particle_gun(
             parameterSets = cms.vstring('pythia8CommonSettings','pythia8CUEP8M1Settings')
             )
     if abs(pdgid) == 6:
-        # Treat this as ttbar rather than a single top gun
-        # THIS DOES NOT WORK, need to get a generator from a newer runTheMatrix workflow
+        # process.GlobalTag = GlobalTag(process.GlobalTag, 'auto:phase2_realistic_T21', '')
         process.generator = cms.EDFilter("Pythia8GeneratorFilter",
             PythiaParameters = cms.PSet(
                 parameterSets = cms.vstring(
-                    'pythia8CommonSettings', 
-                    'pythia8CUEP8M1Settings', 
+                    'pythia8CommonSettings',
+                    'pythia8CP5Settings',
                     'processParameters'
-                    ),
-                processParameters = cms.vstring(
-                    'Top:gg2ttbar = on ', 
-                    'Top:qqbar2ttbar = on ', 
-                    '6:m0 = 175 '
-                    ),
-                pythia8CUEP8M1Settings = cms.vstring(
-                    'Tune:pp 14', 
-                    'Tune:ee 7', 
-                    'MultipartonInteractions:pT0Ref=2.4024', 
-                    'MultipartonInteractions:ecmPow=0.25208', 
-                    'MultipartonInteractions:expPow=1.6'
-                    ),
-                pythia8CommonSettings = cms.vstring(
-                    'Tune:preferLHAPDF = 2', 
-                    'Main:timesAllowErrors = 10000', 
-                    'Check:epTolErr = 0.01', 
-                    'Beams:setProductionScalesFromLHEF = off', 
-                    'SLHA:keepSM = on', 
-                    'SLHA:minMassSM = 1000.', 
-                    'ParticleDecays:limitTau0 = on', 
-                    'ParticleDecays:tau0Max = 10', 
-                    'ParticleDecays:allowPhotonRadiation = on'
-                    )
                 ),
-            comEnergy = cms.double(13000.0),
+                processParameters = cms.vstring(
+                    'Top:gg2ttbar = on ',
+                    'Top:qqbar2ttbar = on ',
+                    '6:m0 = 175 '
+                ),
+                pythia8CP5Settings = cms.vstring(
+                    'Tune:pp 14',
+                    'Tune:ee 7',
+                    'MultipartonInteractions:ecmPow=0.03344',
+                    'MultipartonInteractions:bProfile=2',
+                    'MultipartonInteractions:pT0Ref=1.41',
+                    'MultipartonInteractions:coreRadius=0.7634',
+                    'MultipartonInteractions:coreFraction=0.63',
+                    'ColourReconnection:range=5.176',
+                    'SigmaTotal:zeroAXB=off',
+                    'SpaceShower:alphaSorder=2',
+                    'SpaceShower:alphaSvalue=0.118',
+                    'SigmaProcess:alphaSvalue=0.118',
+                    'SigmaProcess:alphaSorder=2',
+                    'MultipartonInteractions:alphaSvalue=0.118',
+                    'MultipartonInteractions:alphaSorder=2',
+                    'TimeShower:alphaSorder=2',
+                    'TimeShower:alphaSvalue=0.118',
+                    'SigmaTotal:mode = 0',
+                    'SigmaTotal:sigmaEl = 21.89',
+                    'SigmaTotal:sigmaTot = 100.309',
+                    'PDF:pSet=LHAPDF6:NNPDF31_nnlo_as_0118'
+                ),
+                pythia8CommonSettings = cms.vstring(
+                    'Tune:preferLHAPDF = 2',
+                    'Main:timesAllowErrors = 10000',
+                    'Check:epTolErr = 0.01',
+                    'Beams:setProductionScalesFromLHEF = off',
+                    'SLHA:minMassSM = 1000.',
+                    'ParticleDecays:limitTau0 = on',
+                    'ParticleDecays:tau0Max = 10',
+                    'ParticleDecays:allowPhotonRadiation = on'
+                )
+            ),
+            comEnergy = cms.double(14000.0),
             filterEfficiency = cms.untracked.double(1.0),
             maxEventsToPrint = cms.untracked.int32(0),
             pythiaHepMCVerbosity = cms.untracked.bool(False),
             pythiaPylistVerbosity = cms.untracked.int32(0)
-            )
+        )
     else:
         # Single particle gun (+anti)
         process.generator = cms.EDFilter("Pythia8PtGun",
