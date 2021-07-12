@@ -113,9 +113,12 @@ def init_process(options):
     if options.minpt == -1. and options.maxpt == -1.:
         minpt = options.pt - 0.01
         maxpt = options.pt + 0.01
+        ptstring = str(int(options.pt))
     else:
         minpt = options.minpt
         maxpt = options.maxpt
+        ptstring = str(int(options.minpt)) + 'to' + str(int(options.maxpt))
+    if abs(options.pdgid) == 6: ptstring = '14000'
     print 'Using pdgid={}, minpt={}, maxpt={}'.format(options.pdgid, minpt, maxpt)
     add_single_particle_gun(process, options.pdgid, minpt=minpt, maxpt=maxpt)
     if options.debug: add_debug_module(process, 'DoFineCalo')
@@ -132,11 +135,11 @@ def init_process(options):
     # Make nicely formatted output root file
     if options.outputFile.startswith('default'):
         from time import strftime
-        outputFile = '{outputlvl}_event{seed}_pdgid{pdgid}_{pt}GeV_{date}_{finecalo}_n{nevents}.root'.format(
+        outputFile = '{outputlvl}_seed{seed}_pdgid{pdgid}_{pt}GeV_{date}_{finecalo}_n{nevents}.root'.format(
             outputlvl = 'NTUPLE' if options.ntuple else 'SIM',
             seed = options.seed,
             pdgid = abs(options.pdgid),
-            pt = int(options.pt) if abs(options.pdgid) != 6 else 14000,
+            pt = ptstring,
             date = strftime('%b%d'),
             finecalo = 'finecalo' if options.dofinecalo else 'nofine',
             nevents = options.maxEvents
