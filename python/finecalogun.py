@@ -17,6 +17,8 @@ def parse_options():
         )
     # Actual options
     register_float('pt', 100., 'Pt in GeV (only for single particle guns)')
+    register_float('minpt', -1., 'Pt in GeV (only for single particle guns)')
+    register_float('maxpt', -1., 'Pt in GeV (only for single particle guns)')
     register_int('pdgid', -13, 'PdgID of the single particle gun (default -13 muon)')
     register_int('seed', 1001, 'RNG seed')
     register_bool('debug', False, 'Enable debug logging')
@@ -108,7 +110,14 @@ def init_process(options):
     # _____________________________
     # Main customisations
 
-    add_single_particle_gun(process, options.pdgid, options.pt)
+    if options.minpt == -1. and options.maxpt == -1.:
+        minpt = options.pt - 0.01
+        maxpt = options.pt + 0.01
+    else:
+        minpt = options.minpt
+        maxpt = options.maxpt
+    print 'Using pdgid={}, minpt={}, maxpt={}'.format(options.pdgid, minpt, maxpt)
+    add_single_particle_gun(process, options.pdgid, minpt=minpt, maxpt=maxpt)
     if options.debug: add_debug_module(process, 'DoFineCalo')
 
     # _____________________________
@@ -194,8 +203,7 @@ def init_process(options):
 
 
 def add_single_particle_gun(
-    process,
-    pdgid=-13, pt=100.
+    process, pdgid=-13, minpt=None, maxpt=None
     ):
     pythia_parameters = cms.PSet(parameterSets = cms.vstring())
     if 1 <= abs(pdgid) <= 5:
@@ -267,14 +275,14 @@ def add_single_particle_gun(
                 MaxEta = cms.double(2.8),
                 MinPhi = cms.double(-3.14159265359),
                 MaxPhi = cms.double(3.14159265359),
-                MinPt = cms.double(pt - 0.01),
-                MaxPt = cms.double(pt + 0.01),
+                MinPt = cms.double(minpt),
+                MaxPt = cms.double(maxpt),
                 ParticleID = cms.vint32(pdgid),
                 ),
             PythiaParameters = pythia_parameters,
             Verbosity = cms.untracked.int32(0),
             firstRun = cms.untracked.uint32(1),
-            psethack = cms.string('single {0} pt {1}'.format(pdgid, int(pt)))
+            psethack = cms.string('single {} pt {}to{}'.format(pdgid, minpt, maxpt))
             )
 
 
