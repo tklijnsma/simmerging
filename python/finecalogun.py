@@ -119,7 +119,7 @@ def init_process(options):
         maxpt = options.maxpt
         ptstring = str(int(options.minpt)) + 'to' + str(int(options.maxpt))
     if abs(options.pdgid) == 6: ptstring = '14000'
-    print 'Using pdgid={}, minpt={}, maxpt={}'.format(options.pdgid, minpt, maxpt)
+    print('Using pdgid={}, minpt={}, maxpt={}'.format(options.pdgid, minpt, maxpt))
     add_single_particle_gun(process, options.pdgid, minpt=minpt, maxpt=maxpt)
     if options.debug: add_debug_module(process, 'DoFineCalo')
 
@@ -301,5 +301,5 @@ def add_debug_module(process, module_name='DoFineCalo'):
         )
 
 process = init_process(parse_options())
-print 'Final process.schedule:'
-print process.schedule
+print('Final process.schedule:')
+print(process.schedule)
