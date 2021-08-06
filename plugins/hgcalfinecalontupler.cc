@@ -200,6 +200,7 @@ void hgcalfinecalontupler::beginJob() {
     makeBranch<float>("simtrack_vertex_y");
     makeBranch<float>("simtrack_vertex_z");
     makeBranch<float>("simtrack_vertex_t");
+    makeBranch<int>("simtrack_vertex_processsubtype");
     makeBranch<int>("simtrack_vertex_processtype");
     makeBranch<int>("simtrack_parenttrackid");
     makeBranch<bool>("simtrack_noparent");
@@ -342,7 +343,8 @@ void hgcalfinecalontupler::analyze(const edm::Event& iEvent, const edm::EventSet
         fill<float>("simtrack_vertex_y", position.Y());
         fill<float>("simtrack_vertex_z", position.Z());
         fill<float>("simtrack_vertex_t", position.T());
-        fill<int>("simtrack_vertex_processtype", vertex.processType());
+        fill<int>("simtrack_vertex_processsubtype", vertex.processType());
+        fill<int>("simtrack_vertex_processtype", vertex.processMainType());
         fill<int>("simtrack_parenttrackid", vertex.parentIndex());
         fill<bool>("simtrack_noparent", vertex.noParent());
         // Check whether the parent track exists
